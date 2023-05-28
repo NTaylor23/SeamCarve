@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>seamcarve</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</head>
+<body>
+    <h1>Seam Carving Tool</h1>
+
+    <p>
+        <h4>Explanation:</h4>
+        Seam carving is a method for resizing images that preserves key features to prevent distortion. <br />
+        It identifies and removes the least important paths of pixels
+        in the image, based on an energy function derived from the Sobel convolution. <br />
+        <br />
+        By repeatedly eliminating low-energy pixel paths, 
+        the image is reshaped while maintaining its integral details.
+        <br />
+    </p>
+    <!--<footer>- Nicholas Taylor, 2023</footer>-->
+    <br />
+    <hr>
+    <form id="picture_form", enctype="multipart/form-data">
+
+        <input type="file" id="picture_input" name="picture" accept="image/*" required><br />
+        <input type="range" id="slider" value="0" hidden/>
+        <p id="number" hidden></p>
+        <img src="" id="picture_output"/></p>
+
+    </form>
+
+</body>
+</html>
