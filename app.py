@@ -17,7 +17,10 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1000 * 1000
 
+LIMIT = 550
+
 q = queue.Queue()
+lock = threading.Lock()
 
 # ------------ BACK END ------------
 @dataclass
@@ -34,23 +37,17 @@ class ImageWorker():
     
     seam_cache = {}
     
-    def set_scaling_factor(self, prev, curr):
-        self.prev_scaling_factor = prev
-        self.curr_scaling_factor = curr
-    
     def get_user_facing_image(self) -> cv2.Mat:
         return self.img
     
     def resize(self, img: cv2.Mat):
         h, w, _ = img.shape
-        
-        limit = 666
-        
-        if w <= limit and h <= limit:
+            
+        if w <= LIMIT and h <= LIMIT:
             return img
 
         max_dim = max(w, h)        
-        ratio = max_dim / limit
+        ratio = max_dim / LIMIT
         return cv2.resize(img, (int(w / ratio), int(h / ratio)))
 
     def instantiate(self, file) -> None:
@@ -64,37 +61,60 @@ class ImageWorker():
         self.current_height, self.current_width, _ = self.img.shape
         self.initial_height, self.initial_width, _ = self.img.shape
         
-        self.set_scaling_factor(self.current_width, self.current_width)
-    
+        self.prev_scaling_factor = self.current_width
+        self.curr_scaling_factor = self.current_width
+            
+    # def process(self, scaling_factor: int) -> None:
+    #     self.curr_scaling_factor = scaling_factor
+        
+    #     new_dim = (self.current_height, self.curr_scaling_factor)
+                
+    #     if self.curr_scaling_factor > self.prev_scaling_factor and new_dim in self.seam_cache:
+    #         # Stretching the image - seam will be cached, no need to re-process
+    #         self.img = self.add_seam(scaling_factor)
+    #         self.prev_scaling_factor = scaling_factor
+    #         return
+    #     elif new_dim in self.seam_cache:
+    #         # Seam is already cached, no need to re-process
+    #         seam = list(map(lambda x: x[0][1] if x else 0, self.seam_cache[new_dim]))
+    #     else:
+    #         # Must calculate the seam
+    #         gray = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
+    #         sobel_map = self.sobel(gray)
+    #         energy_data = self.calculate_energies(sobel_map)
+    #         seam = self.define_path(energy_data)
+        
+    #     self.prev_scaling_factor = scaling_factor
+    #     self.img = self.remove_seam(seam)
+        
     def process(self, scaling_factor: int) -> None:
-        
+        self.curr_scaling_factor = scaling_factor
         new_dim = (self.current_height, self.curr_scaling_factor)
-                
-        if self.curr_scaling_factor > self.prev_scaling_factor:
-            # Stretching the image - seam will be cached, no need to re-process
-            self.img = self.add_seam(scaling_factor)
-            return
-        elif new_dim in self.seam_cache:
-            # Seam is already cached, no need to re-process
-            derived_seam = list(map(lambda x: x[0][1] if x else 0, self.seam_cache[new_dim]))
-            self.img = self.remove_seam(derived_seam)
-            return
-                
-        # grayscale
-        gray = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
         
-        # calculate sobel convolution
-        sobel_map = self.sobel(gray)
+        # Check if seam is already cached
+        if new_dim in self.seam_cache:
+            # If stretching the image and seam is cached
+            if self.curr_scaling_factor > self.prev_scaling_factor:
+                self.img = self.add_seam(scaling_factor)
+                self.prev_scaling_factor = scaling_factor
+                return
+            
+            # If shrinking the image and seam is cached
+            seam = list(map(lambda x: x[0][1] if x else 0, self.seam_cache[new_dim]))
         
-        # find min-energy path in image
-        energy_data = self.calculate_energies(sobel_map)
+        # If seam is not cached, calculate the seam
+        else:
+            gray = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
+            sobel_map = self.sobel(gray)
+            energy_data = self.calculate_energies(sobel_map)
+            seam = self.define_path(energy_data)
         
-        # define the points along the seam
-        vertical_seam = self.define_path(energy_data)
+        # Remove the seam
+        self.img = self.remove_seam(seam)
         
-        #self.prev_scaling_factor = scaling_factor
-        self.img = self.remove_seam(vertical_seam)
-        
+        # Update the previous scaling factor
+        self.prev_scaling_factor = scaling_factor
+
     def add_seam(self, scaling_factor):
         height, width, channels = self.img.shape
         path_data = self.seam_cache[(height, scaling_factor)]
@@ -125,15 +145,11 @@ class ImageWorker():
 
         return grid
 
-    def define_path(self, numbers):
-        """
-        Ensure that this function prefers to take a seam from seam_cache rather than calculate a new one.
-        If the user shrinks then stretches an image, then shrinks it again, use the cached data if it exists.
-        """
+    def define_path(self, grid: np.ndarray):
         min_point_layer = np.zeros(self.current_height, np.int32)
         pixel_layer = np.empty(self.current_height, dtype=object)
         
-        min_point_layer[0] = np.argmin(numbers[0])
+        min_point_layer[0] = np.argmin(grid[0])
         
         col = min_point_layer[0]
 
@@ -142,7 +158,7 @@ class ImageWorker():
         for row in range(1, self.current_height - 1):
             next_x = col
             for k in range(max(0, col - 1), min(self.current_width, col + 2)):
-                if numbers[row][k] < numbers[row][next_x]:
+                if grid[row][k] < grid[row][next_x]:
                     next_x = k
             col = next_x
             min_point_layer[row] = col
@@ -151,17 +167,15 @@ class ImageWorker():
         # width might need to be changed!
         self.seam_cache[(self.current_height, self.current_width)] = pixel_layer
         return min_point_layer
-
+    
     def remove_seam(self, seam):
         height, width, channels = self.img.shape
-        path_points = np.array(seam)
-        new_image = np.zeros((height, width - 1, channels), dtype=self.img.dtype)
         
-        for row in range(self.current_height):
-            point_to_remove = path_points[row]
-            new_image[row, :point_to_remove] = self.img[row, :point_to_remove]
-            new_image[row, point_to_remove:] = self.img[row, point_to_remove + 1:]
+        mask = np.ones(self.img.shape, dtype=bool)
+        mask[np.arange(height), seam, :] = False
         
+        new_image = self.img[mask].reshape(height, width - 1, channels)
+
         self.current_height, self.current_width, _ = new_image.shape
         return new_image
     
@@ -177,14 +191,19 @@ def send_image_to_front_end(img: cv2.Mat):
     base64_image: bytes = b64encode(encoded_image).decode('utf-8')
     return jsonify({'message': 'Image processed successfully', 'image': base64_image}), 200    
 
-def add_to_queue():
+def start_queue():
     while True:
         scaling_factor = q.get()
-        if scaling_factor is None:
-            break
-        iw.set_scaling_factor(iw.curr_scaling_factor, scaling_factor)
-        iw.process(scaling_factor)
-        q.task_done() 
+        if scaling_factor is not None:
+            with lock:
+                iw.process(scaling_factor)
+            q.task_done() 
+        
+def signum(n):
+    return (n > 0) - (n < 0)
+
+threading.Thread(target=start_queue, daemon=True).start()
+
 # ------------ FRONT END ------------
 @app.route("/")
 def index():
@@ -196,30 +215,41 @@ def receive_image():
         return 'No image file found in the request', 400
     
     iw.instantiate(request.files['picture'])
-    threading.Thread(target=add_to_queue, daemon=True).start()
     return send_image_to_front_end(iw.get_user_facing_image())
     
 @app.route('/process_image', methods=['POST'])
 def process_image():
     st = perf_counter()    
     
-    scaling_factor: int = int(request.form['scaling_factor'])
+    new_scaling_factor: int = int(request.form['scaling_factor'])
     
-    q.put(scaling_factor)
+    curr, target = iw.curr_scaling_factor, new_scaling_factor
+    step = -signum(curr - target)
     
+    if step == 0:
+        res = iw.get_user_facing_image()
+        return send_image_to_front_end(res)
+    
+    for i in range(curr + step, target, step):
+        q.put(i)
+    
+    q.join()
+                
     end = perf_counter()
     # print(f'COMPLETED IN {end - st} SECONDS.')
-    return send_image_to_front_end(iw.get_user_facing_image())
+    with lock:
+        res = iw.get_user_facing_image()
+        return send_image_to_front_end(res)
     
 
 if __name__ == '__main__':
     """
     TODO:
-    - ✅ Implement a blocking cache that waits until all requests are complete to begin a new request
-    - ✅ Save deleted seams to enable increasing width
-    - ✅ Allow the user to either shrink or grow the image
-    
-    - OPTIMIZE...
+    - Fix the crashing issue - something's going wrong with the numbers going into `process` and its submethods
+    - Optimize the seam detection and seam adding methods
+    - Add vertical use
+    - Improve GUI (React?)
+    - Find a way to run it on my website
     
     """
     app.run(debug=True, port=8000)

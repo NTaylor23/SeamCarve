@@ -44,7 +44,7 @@ document.addEventListener("DOMContentLoaded", function () {
       image.onload = () => {
         const width = image.naturalWidth;
         const height = image.naturalHeight;
-        slider_range = Math.min(666, width);
+        slider_range = Math.min(550, width);
         slider_vertical_range = 374;
 
         slider.min = 20;
