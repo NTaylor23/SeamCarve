@@ -2,11 +2,11 @@ from base64 import b64encode
 from flask import Flask, render_template, jsonify, request, send_file, url_for
 from dataclasses import dataclass
 from time import perf_counter
-from threading import Thread
 
 import cv2
 import numpy as np
 import queue
+import threading
 
 # ------------ CONSTANTS ------------
 UPLOAD_FOLDER = 'static/media'
@@ -26,6 +26,10 @@ class ImageWorker():
     current_height: int = 0
     current_width: int = 0
     
+    prev_scaling_factor: int = 0
+    
+    seam_cache = {}
+    
     def get_user_facing_image(self) -> cv2.Mat:
         return self.img
     
@@ -41,7 +45,6 @@ class ImageWorker():
         ratio = max_dim / limit
         return cv2.resize(img, (int(w / ratio), int(h / ratio)))
 
-    
     def instantiate(self, file) -> None:
         # read raw bytes
         image_data = np.frombuffer(file.read(), dtype=np.uint8)
@@ -56,11 +59,10 @@ class ImageWorker():
         # set height/width
         self.current_height, self.current_width, _ = self.img.shape
         self.initial_height, self.initial_width, _ = self.img.shape
+        self.prev_scaling_factor = self.current_height
     
-    def process(self) -> None:
-        
-        print(self.img.shape)
-        
+    def process(self, scaling_factor: int) -> None:
+                
         # grayscale
         gray = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
         
@@ -129,7 +131,15 @@ def send_image_to_front_end(img: cv2.Mat):
     base64_image: bytes = b64encode(encoded_image).decode('utf-8')
     return jsonify({'message': 'Image processed successfully', 'image': base64_image}), 200    
 
-
+def queue_worker():
+    while True:
+        print('Queue is waiting...')
+        item = q.get()
+        if item is None:
+            break
+        # Start processing
+        iw.process(0)
+        q.task_done() 
 # ------------ FRONT END ------------
 @app.route("/")
 def index():
@@ -141,18 +151,15 @@ def receive_image():
         return 'No image file found in the request', 400
     
     iw.instantiate(request.files['picture'])
+    threading.Thread(target=queue_worker, daemon=True).start()
     return send_image_to_front_end(iw.get_user_facing_image())
     
 @app.route('/process_image', methods=['POST'])
 def process_image():
-    st = perf_counter()
-    
+    st = perf_counter()    
     scaling_factor: int = int(request.form['scaling_factor'])
-    print('scaling factor:', scaling_factor)
-    iw.process()
-    
+    q.put(scaling_factor)
     end = perf_counter()
-    
     # print(f'COMPLETED IN {end - st} SECONDS.')
     return send_image_to_front_end(iw.get_user_facing_image())
     
@@ -160,7 +167,7 @@ def process_image():
 if __name__ == '__main__':
     """
     TODO:
-    - Implement a blocking cache that waits until all requests are complete to begin a new request
+    - ✅ Implement a blocking cache that waits until all requests are complete to begin a new request
     - Save deleted seams to enable increasing width
     - OPTIMIZE...
     
