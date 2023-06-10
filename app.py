@@ -32,8 +32,6 @@ class ImageWorker():
     curr_scaling_factor: int = 0
     prev_scaling_factor: int = 0
     
-    # k: (int, int), v: [(int, int), [ndarray]]
-    # this can be improved, but the key must be hashable
     seam_cache = {}
     
     def set_scaling_factor(self, prev, curr):
@@ -155,7 +153,6 @@ class ImageWorker():
         return min_point_layer
 
     def remove_seam(self, seam):
-        #print(seam)
         height, width, channels = self.img.shape
         path_points = np.array(seam)
         new_image = np.zeros((height, width - 1, channels), dtype=self.img.dtype)
