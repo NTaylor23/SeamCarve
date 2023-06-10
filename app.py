@@ -11,10 +11,13 @@ import threading
 # ------------ CONSTANTS ------------
 UPLOAD_FOLDER = 'static/media'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+
 app = Flask(__name__)
-q = queue.Queue()
+
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1000 * 1000
+
+q = queue.Queue()
 
 # ------------ BACK END ------------
 @dataclass
@@ -91,8 +94,13 @@ class ImageWorker():
         return grid
 
     def define_path(self, numbers):
+        """
+        Ensure that this function prefers to take a seam from seam_cache rather than calculate a new one.
+        If the user shrinks then stretches an image, then shrinks it again, use the cached data if it exists.
+        """
         min_point_layer = np.zeros(self.current_height, np.int32)
-
+        pixel_layer = np.empty(self.current_height, dtype=object)
+        
         min_point_layer[0] = np.argmin(numbers[0])
         col = min_point_layer[0]
 
@@ -103,7 +111,9 @@ class ImageWorker():
                     next_x = k
             col = next_x
             min_point_layer[row] = col
+            pixel_layer[row] = self.img[row][col]
 
+        self.seam_cache[(self.current_height, self.current_width)] = pixel_layer
         return min_point_layer
 
     def remove_seam(self, seam):
@@ -131,14 +141,12 @@ def send_image_to_front_end(img: cv2.Mat):
     base64_image: bytes = b64encode(encoded_image).decode('utf-8')
     return jsonify({'message': 'Image processed successfully', 'image': base64_image}), 200    
 
-def queue_worker():
+def add_to_queue():
     while True:
-        print('Queue is waiting...')
-        item = q.get()
-        if item is None:
+        scaling_factor = q.get()
+        if scaling_factor is None:
             break
-        # Start processing
-        iw.process(0)
+        iw.process(scaling_factor)
         q.task_done() 
 # ------------ FRONT END ------------
 @app.route("/")
@@ -151,14 +159,17 @@ def receive_image():
         return 'No image file found in the request', 400
     
     iw.instantiate(request.files['picture'])
-    threading.Thread(target=queue_worker, daemon=True).start()
+    threading.Thread(target=add_to_queue, daemon=True).start()
     return send_image_to_front_end(iw.get_user_facing_image())
     
 @app.route('/process_image', methods=['POST'])
 def process_image():
     st = perf_counter()    
+    
     scaling_factor: int = int(request.form['scaling_factor'])
+    
     q.put(scaling_factor)
+    
     end = perf_counter()
     # print(f'COMPLETED IN {end - st} SECONDS.')
     return send_image_to_front_end(iw.get_user_facing_image())
@@ -168,7 +179,8 @@ if __name__ == '__main__':
     """
     TODO:
     - ✅ Implement a blocking cache that waits until all requests are complete to begin a new request
-    - Save deleted seams to enable increasing width
+    - ✅ Save deleted seams to enable increasing width
+    - Allow the user to either shrink or grow the image
     - OPTIMIZE...
     
     """
