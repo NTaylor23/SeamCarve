@@ -1,8 +1,10 @@
+const imageWidth = 550;
+
 document.addEventListener("DOMContentLoaded", function () {
   const picture_input = document.getElementById("picture_input");
   const picture_output = document.getElementById("picture_output");
   const slider = document.getElementById("slider");
-  const number = document.getElementById("number");
+  const number = document.getElementById("width_text");
 
   let slider_range = 1;
 
@@ -20,7 +22,7 @@ document.addEventListener("DOMContentLoaded", function () {
       })
         .then((response) => response.json())
         .then((data) => {
-          // Display the resulting image
+          // Don't cache the images
           URL.revokeObjectURL(blob);
           picture_output.src = "data:image/png;base64," + data.image;
         })
@@ -44,14 +46,15 @@ document.addEventListener("DOMContentLoaded", function () {
       image.onload = () => {
         const width = image.naturalWidth;
         const height = image.naturalHeight;
-        slider_range = Math.min(550, width);
-        slider_vertical_range = 374;
+
+        origWidth = width;
+
+        slider_range = Math.min(imageWidth, width);
 
         slider.min = 20;
         slider.max = slider_range;
         slider.value = slider_range;
         slider.style = `width: ${slider_range}px`;
-
 
         number.innerHTML = `Width: 100%`;
         slider.hidden = false;
@@ -61,7 +64,17 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
-  function getModifiedImage(route) {
+  function debounce(func, wait) {
+    let timeout;
+    return function (...args) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func.apply(this, args), wait);
+    };
+  }
+
+  const getModifiedImage = debounce(function (route) {
+    picture_output.classList.add("image-scaling");
+
     let dataPacket = new FormData();
     dataPacket.append("scaling_factor", slider.value);
 
@@ -71,13 +84,13 @@ document.addEventListener("DOMContentLoaded", function () {
     })
       .then((response) => response.json())
       .then((data) => {
-        // Display the resulting image
+        picture_output.style.transform = "none";
         picture_output.src = "data:image/png;base64," + data.image;
       })
       .catch((error) => {
         console.error("Error:", error);
       });
-  }
+  }, 100);
 
   slider.oninput = function () {
     number.innerHTML = `Width: ${Math.round(

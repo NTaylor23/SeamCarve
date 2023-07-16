@@ -1,4 +1,3 @@
-/* Reset some browser defaults */
 * {
   margin: 5;
   padding: 5;
@@ -51,7 +50,6 @@ button {
 button:hover {
   background-color: #555;
 }
-
 
 #output {
   margin-top: 20px;
